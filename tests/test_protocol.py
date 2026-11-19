@@ -39,6 +39,7 @@ class ProtocolTests(unittest.TestCase):
                 validate_command(dict({"v": 1, "id": 1, "cmd": "ping"}, **changes))
         self.assertEqual(validate_command({"v": 1, "id": 1, "cmd": "state", "state": "idle",
                                            "info": "0 / 200"}), "state")
+        self.assertEqual(validate_command({"v": 1, "id": 2, "cmd": "pet_next"}), "pet_next")
 
 
 if __name__ == "__main__":

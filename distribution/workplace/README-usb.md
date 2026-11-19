@@ -64,7 +64,8 @@ Dans OpenCode, `/reload` si le plugin n'apparaît pas.
 
 ## 4. Mettre le firmware à jour (USB)
 
-Le mode USB exige le **firmware 0.3.0**. Brancher l'ESP32, puis :
+Le mode USB exige le **firmware 0.5.0** pour le changement de pet depuis le tableau
+de bord. Brancher l'ESP32, puis :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pc.buddy --serial auto scan
@@ -80,7 +81,7 @@ OpenBuddy. Vérification :
 .\.venv\Scripts\python.exe -m pc.buddy --serial auto status
 ```
 
-La réponse doit contenir `"transport": "usb"` et `"firmware": "0.3.0"`.
+La réponse doit contenir `"transport": "usb"` et `"firmware": "0.5.0"`.
 Pour tester les animations : `.\.venv\Scripts\python.exe -m pc.buddy --serial auto demo`.
 
 ## 5. Lancer le compagnon
@@ -93,6 +94,15 @@ Pour tester les animations : `.\.venv\Scripts\python.exe -m pc.buddy --serial au
 sont joués par le PC. `auto` choisit l'unique port série Espressif ; s'il y en a
 plusieurs, utiliser `--serial COM6`. Aucun programme n'est installé au démarrage de
 Windows. Le pont se reconnecte seul si le câble est débranché puis rebranché.
+
+Dans un second terminal, `python -m pc.webtest` ouvre le tableau de bord du bridge.
+Il montre l'état OpenCode et un aperçu web animé synchronisé avec cet état ; le pack
+de l'aperçu se choisit indépendamment du pet de l'ESP32. Il permet d'installer en un
+clic un pack valide de `build/pets/` si la SD est détectée ou d'activer un pack déjà
+sur la SD, et offre un aperçu manuel temporisé (15 s par
+défaut) qui revient ensuite à OpenCode. L'aperçu ne répond à aucune permission.
+Pendant l'installation, le bridge libère puis reprend COM ; ne pas lancer un autre
+outil série en parallèle.
 
 Pour lancer le pont en arrière-plan, utiliser `tools\openbuddy-usb.cmd` après
 l'installation du venv et du plugin. Pour l'arrêter : `tools\openbuddy-usb-stop.cmd`.

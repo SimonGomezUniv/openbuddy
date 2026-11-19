@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -84,7 +86,9 @@ class HTTPTests(unittest.IsolatedAsyncioTestCase):
         writer.close()
         await writer.wait_closed()
         head, content = response.split(b"\r\n\r\n", 1)
-        return int(head.split(b" ")[1]), json.loads(content)
+        headers = head.decode("ascii").lower()
+        value = json.loads(content) if "content-type: application/json" in headers else content.decode("utf-8")
+        return int(head.split(b" ")[1]), value
 
     async def test_authenticated_state_and_health(self):
         status, response = await self.request()
@@ -92,6 +96,140 @@ class HTTPTests(unittest.IsolatedAsyncioTestCase):
         status, health = await self.request("GET", "/health")
         self.assertEqual(health["state"]["state"], "thinking")
         self.assertTrue(health["read_only"])
+
+    async def test_dashboard_is_same_origin_and_has_manual_controls(self):
+        status, page = await self.request("GET", "/", extra="Origin: http://127.0.0.1:%d\r\n" % self.bridge.port)
+        self.assertEqual(status, 200)
+        self.assertIn("/manual-state", page)
+        self.assertIn('value="15"', page)
+
+    async def test_manual_state_temporarily_overrides_and_returns_to_opencode(self):
+        self.bridge.usb_connected = True
+        self.bridge.registry.update(message(state="working"))
+        status, response = await self.request(path="/manual-state",
+                                              body={"state": "success", "duration": 15, "label": "Preview"})
+        self.assertEqual(status, 200)
+        self.assertEqual(response, {"state": "success", "label": "Preview", "duration": 15})
+        health = (await self.request("GET", "/health"))[1]
+        self.assertEqual(health["state"]["state"], "working")
+        self.assertEqual(health["display_state"]["state"], "success")
+        self.bridge.manual_override["expires_at"] = time.monotonic() - 1
+        health = self.bridge.health()
+        self.assertIsNone(health["manual_override"])
+        self.assertEqual(health["display_state"]["state"], "working")
+
+    async def test_manual_state_requires_connected_device_and_valid_duration(self):
+        status, _ = await self.request(path="/manual-state", body={"state": "success", "duration": 15})
+        self.assertEqual(status, 409)
+        self.bridge.usb_connected = True
+        for duration in (0, 3601, True):
+            status, _ = await self.request(path="/manual-state",
+                                           body={"state": "success", "duration": duration})
+            self.assertEqual(status, 400)
+        self.assertIsNone(self.bridge.manual_override)
+
+    async def test_pet_install_requires_sd_and_usb(self):
+        status, response = await self.request("POST", "/pets/install", body={"pet": "creepy"})
+        self.assertEqual(status, 409)
+        self.assertIn("USB", response["error"])
+
+        self.bridge.usb_connected = True
+        self.bridge.usb_link = object()
+        self.bridge.usb_port = "COM_TEST"
+        status, response = await self.request("POST", "/pets/install", body={"pet": "creepy"})
+        self.assertEqual(status, 409)
+        self.assertIn("SD", response["error"])
+
+    async def test_pet_catalog_lists_only_valid_local_packs(self):
+        root = Path(self.directory.name) / "pets"
+        (root / "creepy").mkdir(parents=True)
+        self.bridge.pet_root = root
+        manifest = {"animations": {"idle": {"frames": 5, "bytes": 100}}}
+        with patch("pc.opencode.inspect_pack", return_value=("creepy", manifest, ["idle.rgb565"])):
+            self.bridge.device_status["pet"] = "creepy"
+            status, response = await self.request("GET", "/pets")
+        self.assertEqual(status, 200)
+        self.assertTrue(response["sd"] is False)
+        self.assertEqual(response["pets"], [{"id": "creepy", "name": "Creepy",
+                                             "animations": 1, "frames": 5,
+                                             "size_bytes": 100, "active": True}])
+
+    async def test_pet_install_pauses_usb_and_runs_local_installer(self):
+        class FakeLink:
+            def __init__(self, bridge):
+                self.bridge = bridge
+                self.disconnected = asyncio.Event()
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+                self.bridge.usb_disconnected.set()
+
+        link = FakeLink(self.bridge)
+        root = Path(self.directory.name) / "pets"
+        (root / "creepy").mkdir(parents=True)
+        self.bridge.pet_root = root
+        self.bridge.usb_connected = True
+        self.bridge.usb_link = link
+        self.bridge.usb_port = "COM_TEST"
+        self.bridge.usb_disconnected.clear()
+        self.bridge.device_status["sd"] = True
+        with patch.object(self.bridge, "local_pets", return_value=[{"id": "creepy"}]), \
+                patch.object(self.bridge, "_install_local_pet") as installer:
+            result = await self.bridge.install_local_pet("creepy")
+        self.assertEqual(result, {"installed": "creepy"})
+        self.assertTrue(link.disconnected.is_set())
+        self.assertTrue(link.closed)
+        self.assertTrue(self.bridge.usb_resume.is_set())
+        self.assertFalse(self.bridge.pet_installing)
+        installer.assert_called_once()
+
+    async def test_pet_activation_uses_same_sd_and_usb_pause(self):
+        class FakeLink:
+            def __init__(self, bridge):
+                self.bridge = bridge
+                self.disconnected = asyncio.Event()
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+                self.bridge.usb_disconnected.set()
+
+        link = FakeLink(self.bridge)
+        root = Path(self.directory.name) / "pets"
+        (root / "creepy").mkdir(parents=True)
+        self.bridge.pet_root = root
+        self.bridge.usb_connected = True
+        self.bridge.usb_link = link
+        self.bridge.usb_port = "COM_TEST"
+        self.bridge.usb_disconnected.clear()
+        self.bridge.device_status["sd"] = True
+        self.bridge.local_pets = lambda: [{"id": "creepy"}]
+        with patch.object(self.bridge, "_activate_local_pet") as activator:
+            result = await self.bridge.activate_local_pet("creepy")
+        self.assertEqual(result, {"activated": "creepy"})
+        self.assertTrue(link.closed)
+        self.assertTrue(self.bridge.usb_disconnected.is_set())
+        self.assertTrue(self.bridge.usb_resume.is_set())
+        activator.assert_called_once()
+
+    async def test_pet_preview_returns_validated_idle_rgb565_frame(self):
+        root = Path(self.directory.name) / "pets"
+        folder = root / "creepy"
+        folder.mkdir(parents=True)
+        frames = bytes(range(32))
+        (folder / "idle.rgb565").write_bytes(frames)
+        manifest = {"id": "creepy", "format": "RGB565-BE", "width": 2, "height": 4,
+                    "states": {"idle": "idle"},
+                    "animations": {"idle": {"file": "idle.rgb565", "frames": 2,
+                                              "frame_ms": 260, "bytes": 32}}}
+        self.bridge.pet_root = root
+        with patch("pc.opencode.inspect_pack", return_value=("creepy", manifest, ["idle.rgb565"])):
+            preview = self.bridge.local_pet_preview("creepy")
+        self.assertEqual((preview["width"], preview["height"]), (2, 4))
+        self.assertEqual(preview["frame_ms"], 260)
+        self.assertEqual([base64.b64decode(frame) for frame in preview["frames"]],
+                         [frames[:16], frames[16:]])
 
     async def test_unauthorized_and_browser_origin_are_rejected(self):
         self.assertEqual((await self.request(token="wrong"))[0], 401)

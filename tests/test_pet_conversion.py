@@ -2,11 +2,14 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
-from pc.pet import CLIPS, STATE_CLIPS, clip_frames, convert, rgb565, valid_id
+from pc.pet import (CLIPS, STATE_CLIPS, activate, clip_frames, convert,
+                    inspect_pack, rgb565, valid_id)
 
 
 class ConversionTests(unittest.TestCase):
@@ -36,6 +39,31 @@ class ConversionTests(unittest.TestCase):
             self.assertEqual(json.loads((output / "manifest.json").read_text())["id"], "test-pet")
             with self.assertRaises(ValueError):
                 convert(sheet, output, "test-pet", {})
+
+    def test_local_pack_inspection_checks_all_animation_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sheet = root / "sheet.png"
+            Image.new("RGBA", (1536, 2288), (0, 0, 255, 255)).save(sheet)
+            pack = root / "test-pet"
+            manifest = convert(sheet, pack, "test-pet", {})
+            pet_id, verified, files = inspect_pack(pack)
+            self.assertEqual(pet_id, "test-pet")
+            self.assertEqual(len(files), len(manifest["animations"]))
+            self.assertEqual(verified["id"], pet_id)
+            (pack / "idle.rgb565").write_bytes(b"corrupt")
+            with self.assertRaises(ValueError):
+                inspect_pack(pack)
+
+    def test_activation_checks_existing_sd_pack_without_copying_assets(self):
+        with patch("pc.pet.subprocess.run") as run:
+            activate(SimpleNamespace(pet="creepy", port="COM_TEST"))
+        command = run.call_args_list[0].args[0]
+        self.assertIn("COM_TEST", command)
+        self.assertTrue(any(str(item).endswith("prepare_pet_activate.py") for item in command))
+        self.assertTrue(any(str(item).endswith("verify_pet_sd.py") for item in command))
+        self.assertFalse(any("fs" == item for item in command))
+        self.assertEqual(len(run.call_args_list), 2)  # Reset after activation.
 
     def test_retry_plays_running_left_then_running_right(self):
         with tempfile.TemporaryDirectory() as temporary:

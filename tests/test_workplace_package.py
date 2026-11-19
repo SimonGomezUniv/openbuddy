@@ -65,6 +65,18 @@ class PackageTests(unittest.TestCase):
     def test_firmware_list_matches_the_deploy_tool(self):
         self.assertEqual(tuple(FIRMWARE_FILES), tuple(DEPLOY_FILES))
 
+    def test_dashboard_modules_are_in_both_kits(self):
+        for variant in ("bluetooth", "usb"):
+            files = files_for(variant)
+            self.assertEqual(files["pc/webui.py"], "pc/webui.py")
+            self.assertEqual(files["pc/webtest.py"], "pc/webtest.py")
+
+    def test_usb_kit_includes_local_pet_install_and_activation_tools(self):
+        files = files_for("usb")
+        self.assertEqual(files["pc/pet.py"], "pc/pet.py")
+        for name in ("prepare_pet_sd.py", "prepare_pet_activate.py", "verify_pet_sd.py"):
+            self.assertEqual(files["tools/" + name], "tools/" + name)
+
     def test_unknown_variant_is_refused(self):
         with self.assertRaises(ValueError):
             files_for("wifi")

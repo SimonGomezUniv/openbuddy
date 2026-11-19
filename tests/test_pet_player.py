@@ -104,6 +104,16 @@ class PlayerTests(unittest.TestCase):
         self.selection.unlink()
         self.assertFalse(self.player().available)
 
+    def test_explicit_pet_id_and_sd_pack_cycling(self):
+        self.selection.write_text('{"pet":"missing"}', encoding="utf-8")
+        player = pet_player.PetPlayer(self.lcd, str(self.root), str(self.selection), pet_id="test-pet")
+        self.addCleanup(player.close)
+        self.assertTrue(player.available)
+        self.assertEqual(pet_player.available_pets(str(self.root)), ["test-pet"])
+        self.assertEqual(pet_player.next_pet_id(["creepy", "test-pet"], "creepy"), "test-pet")
+        self.assertEqual(pet_player.next_pet_id(["creepy", "test-pet"], "test-pet"), "creepy")
+        self.assertIsNone(pet_player.next_pet_id([], "test-pet"))
+
     def test_deadlines_survive_ticks_wraparound(self):
         player = self.player()
         player.draw("idle", (1 << 30) - 100)

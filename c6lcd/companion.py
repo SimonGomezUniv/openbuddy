@@ -1,8 +1,9 @@
 """Single-threaded firmware loop: BLE callbacks never perform LCD drawing."""
 
-import os
 import sys
 import time
+import gc
+import os
 
 from machine import Pin
 from neopixel import NeoPixel
@@ -14,12 +15,11 @@ from buddy_ui import BuddyUI
 from st7789 import LCD, rgb
 from shared_spi import SharedSPI
 from storage import Storage
-from pet_player import PetPlayer
+from pet_player import PetPlayer, available_pets, next_pet_id
 
 
 ORIENTATION_FILE = "openbuddy-orientation.txt"
-# The UI layout is landscape-only: BOOT flips the view by 180 degrees.
-FLIP = {"landscape": "landscape_inv", "landscape_inv": "landscape"}
+# Keep a previously selected landscape orientation; BOOT now cycles SD pets.
 PET_RETRY_MS = 3000
 PET_SLOW_RETRY_MS = 30000
 PET_FAST_ATTEMPTS = 20
@@ -31,15 +31,7 @@ def load_orientation():
             name = handle.read().strip()
     except OSError:
         return "landscape"
-    return name if name in FLIP else "landscape"
-
-
-def save_orientation(name):
-    try:
-        with open(ORIENTATION_FILE, "w") as handle:
-            handle.write(name)
-    except OSError:
-        pass
+    return name if name in ("landscape", "landscape_inv") else "landscape"
 
 
 def run():
@@ -72,8 +64,39 @@ def run():
             except OSError as error:
                 print("Pet reload failed:", error)
 
+        def next_pet():
+            nonlocal player
+            if not storage.mounted:
+                raise ValueError("SD card is not mounted")
+            pets = available_pets()
+            pet_id = next_pet_id(pets, player.pet_id if player is not None else None)
+            if pet_id is None:
+                raise ValueError("No valid pet packs on SD")
+            replacement = PetPlayer(lcd, pet_id=pet_id)
+            if not replacement.available:
+                error = replacement.error or "Pet pack is unavailable"
+                replacement.close()
+                raise ValueError(error)
+            previous = player
+            player = replacement
+            ui.player = replacement
+            if previous is not None:
+                previous.close()
+                previous.buffer = None
+            ui.invalidate()
+            gc.collect()
+            return {"pet": pet_id, "pet_index": pets.index(pet_id) + 1,
+                    "pet_count": len(pets)}
+
+        def change_pet_from_button():
+            try:
+                selected = next_pet()
+                print("Pet selected:", selected["pet"])
+            except (OSError, ValueError) as error:
+                print("Pet switch failed:", error)
+
         buddy = BuddyBLE(asset_status=asset_status)
-        usb = BuddyUSB(asset_status=asset_status)
+        usb = BuddyUSB(asset_status=asset_status, pet_next=next_pet)
         ui = BuddyUI(lcd, led, player)
         pet_attempts = 0
         pet_retry_at = time.ticks_add(time.ticks_ms(), PET_RETRY_MS)
@@ -100,10 +123,7 @@ def run():
                         if buddy.confirm is not None:
                             buddy.button()  # BLE pairing needs a physical confirmation.
                         else:
-                            name = FLIP[lcd.orientation]
-                            lcd.set_orientation(name)
-                            save_orientation(name)
-                            ui.invalidate()
+                            change_pet_from_button()
                     pressed_at = None
             if (pressed_at is not None and not long_sent
                     and time.ticks_diff(now, pressed_at) >= 3000):

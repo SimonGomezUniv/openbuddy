@@ -359,6 +359,8 @@ class BuddyBLE:
                 if self.suspended:
                     raise ValueError("Keyboard is suspended")
                 self.hid_until = time.ticks_add(now, HID_ARM_MS)
+            elif command == "pet_next":
+                raise ValueError("Pet switching is only available over USB")
             self.last_seen = now
             response = {"event": "ack", "id": request_id, "state": self.state}
             if command == "status":

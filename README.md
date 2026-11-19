@@ -53,9 +53,10 @@ automatiquement : les réponses restent dans OpenCode.
 | Démarrage du pont | `--serial auto` ou `--serial COMx` | Sans option de transport |
 | Appairage | Aucun | BOOT long, vérification du code, puis **deuxième appui court** |
 | Écran, pet et halo | Identiques | Identiques |
-| Boutons et clavier | Pas de remontée des boutons ni de HID sur ce transport | BOOT sert à l'appairage (appui long, puis confirmation du code) ; pas d'événement bouton ni de F13 |
+| Boutons et clavier | Aucun événement bouton ni HID transmis ; BOOT fait défiler les pets localement | BOOT court fait défiler les pets ; appui long puis confirmation pour l'appairage ; pas d'événement bouton ni de F13 |
 
-Le mode USB requiert le **firmware 0.3.0** ou plus (0.4.0 pour le quota). Le firmware conserve aussi le BLE :
+Le mode USB requiert le **firmware 0.3.0** ou plus (0.4.0 pour le quota, 0.5.0
+pour le changement de pet). Le firmware conserve aussi le BLE :
 le choix du transport se fait au lancement du pont. En USB, un seul outil peut
 utiliser le port série à la fois. En Bluetooth, le buddy accepte un seul hôte à
 la fois. Les autorisations USB/Bluetooth du système restent applicables.
@@ -96,18 +97,24 @@ plusieurs. **Garder le pont actif**. Les lanceurs `tools\openbuddy-usb.cmd` et
 `tools\openbuddy-usb-stop.cmd` permettent aussi de le démarrer en arrière-plan et
 de l'arrêter, sans démarrage automatique Windows.
 
-Pour tester manuellement l'écran et le halo dans une page web, arrêter d'abord le
-pont USB puis lancer :
+Le tableau de bord web se connecte au bridge existant, sans ouvrir un deuxième
+accès série. Dans un second terminal, lancer :
 
 ```powershell
-.\.venv\Scripts\python.exe -m pc.webtest --port auto
+.\.venv\Scripts\python.exe -m pc.webtest
 ```
 
-Ouvrir `http://127.0.0.1:8765/` dans le navigateur. La page affiche le statut et
-permet d'envoyer chacun des états du firmware. `auto` sélectionne l'unique port
-Espressif ; sinon, préciser `--port COMx`. Le serveur reste local à la machine et
-garde le port ouvert jusqu'à `Ctrl+C` ; ne pas lancer simultanément `pc.opencode`,
-`pc.buddy`, `mpremote` ou un terminal série sur ce port.
+Le tableau de bord compact affiche l'état OpenCode, le pet actif sur l'ESP32 et un
+aperçu web animé synchronisé avec l'état affiché, mais dont le pack se choisit
+indépendamment du pet de l'ESP32. Il liste
+les packs locaux validés dans `build/pets/` : **Installer** copie et
+vérifie les sprites sur une SD détectée, tandis que **Activer** sélectionne un pack
+déjà présent sur la SD. Le bridge libère COM pendant ces opérations puis se reconnecte.
+La page permet aussi de faire défiler les pets par USB et de prévisualiser un état
+(15 s par défaut, réglable de 1 à 3600 s), avec retour automatique à l'état OpenCode
+courant ou immédiat. L'aperçu ne répond jamais aux permissions et ne déclenche pas
+les notifications Windows. Le serveur reste sur `127.0.0.1` et utilise le processus
+et le port du bridge.
 
 Si le firmware doit être mis à jour, arrêter d'abord le pont et les autres outils
 série, puis :
@@ -153,8 +160,10 @@ Dans un autre terminal, depuis la même racine :
 Le pet est lu sur la **microSD**, en RGB565, avec un seul buffer d'image en RAM.
 Sans pack installé, un robot intégré prend le relais. Les sprites et les packs
 du pet ne sont pas fournis dans le dépôt ou les kits : les visuels ci-dessus sont
-une démonstration de l'affichage, pas un pack d'assets. Le bouton BOOT (appui court)
-retourne l'affichage de 180° ; l'orientation choisie est mémorisée.
+une démonstration de l'affichage, pas un pack d'assets. Un appui court sur BOOT fait
+défiler les pets disponibles sur la SD ; l'appui long de 3 s ouvre l'appairage BLE.
+La page de test USB propose aussi un bouton « Pet suivant ». Le choix par bouton est
+temporaire et revient au pet activé sur la SD au prochain redémarrage.
 
 - [Préparer et installer une animation](docs/animations.md)
 - [Afficher le quota du fournisseur (ex. GitHub Copilot)](docs/opencode-events.md#quota-du-fournisseur)
@@ -193,6 +202,7 @@ Un kit existant n'est remplacé qu'avec `--replace`.
 | `c6lcd/orientation_demo.py` | Ancienne démo conservée |
 | `pc/buddy.py` | Diagnostic BLE et USB en Python |
 | `pc/opencode.py` | Pont événements locaux → BLE/USB, authentifié et en lecture seule |
+| `pc/webui.py`, `pc/webtest.py` | Tableau de bord servi par le pont et ouverture dans le navigateur |
 | `pc/notifications.py` | Sons système Windows non bloquants |
 | `pc/toasts.py` | Notifications Windows natives, sans données privées |
 | `pc/install_plugin.py` | Installation globale/par projet sans modifier la configuration |

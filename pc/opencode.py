@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import base64
 import contextlib
 from dataclasses import dataclass
 import hmac
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 import time
@@ -21,10 +23,14 @@ from bleak.exc import BleakError
 from c6lcd.buddy_protocol import SERVICE_UUID, STATES, TX_UUID
 from pc.buddy import Link, UsbLink, find_device, find_serial_port
 from pc.notifications import SOUND_ALIASES, SoundNotifier
+from pc.pet import inspect_pack, valid_id
 from pc.quota import QuotaMonitor
 from pc.toasts import DesktopNotifier
+from pc.webui import PAGE
 
 LEASE_SECONDS = 12
+MANUAL_DEFAULT_SECONDS = 15
+MANUAL_MAX_SECONDS = 3600
 PRIORITY = {"permission": 100, "question": 90, "working": 60, "retry": 55,
             "thinking": 50, "error": 40, "success": 30, "idle": 0}
 
@@ -132,7 +138,21 @@ class Bridge:
         self.server = None
         self.ble_connected = False
         self.worker = None
+        self.status_worker = None
         self.last_delivered = None
+        self.manual_override = None
+        self.usb_link = None
+        self.ble_link = None
+        self.usb_port = None
+        self.usb_resume = asyncio.Event()
+        self.usb_resume.set()
+        self.usb_disconnected = asyncio.Event()
+        self.usb_disconnected.set()
+        self.pet_install_lock = asyncio.Lock()
+        self.pet_installing = False
+        self.pet_root = Path(__file__).resolve().parents[1] / "build" / "pets"
+        self.pet_catalog_cache = None
+        self.device_status = {"pet": None, "sd": False}
         self.notifier = SoundNotifier(muted=mute)
         self.desktop_notifier = DesktopNotifier(disabled=no_notifications)
         self.sound_worker = None
@@ -166,24 +186,190 @@ class Bridge:
         elif not self.no_ble:
             self.worker = asyncio.create_task(self.ble_worker())
         self.sound_worker = asyncio.create_task(self.notification_worker())
+        self.status_worker = asyncio.create_task(self.device_status_worker())
         if not self.no_quota:
             self.quota_worker = asyncio.create_task(self.quota.run())
         print("OpenBuddy event bridge listening on 127.0.0.1:%d (read-only)" % self.port, flush=True)
 
     def health(self):
         view = self.registry.current()
+        manual = self.manual_status()
         return {"v": 1, "sources": len(self.registry.sources), "ble_connected": self.ble_connected,
                 "usb_connected": self.usb_connected,
-                "state": view, "last_delivered": self.last_delivered, "read_only": True,
+                "state": view, "display_state": self.display_state(view), "manual_override": manual,
+                "pet": self.device_status.get("pet"), "sd": self.device_status.get("sd", False),
+                "pet_installing": self.pet_installing,
+                "last_delivered": self.last_delivered, "read_only": True,
                 "sounds_enabled": self.notifier.enabled,
                 "notifications_enabled": self.desktop_notifier.enabled,
                 "notifications_last_error": self.desktop_notifier.error,
                 "quota": self.quota.text or None, "quota_error": self.quota.error}
 
+    def manual_view(self):
+        if self.manual_override is None:
+            return None
+        remaining = self.manual_override["expires_at"] - time.monotonic()
+        if remaining <= 0:
+            self.manual_override = None
+            return None
+        return {"state": self.manual_override["state"], "label": self.manual_override["label"]}
+
+    def manual_status(self):
+        view = self.manual_view()
+        if view is None:
+            return None
+        return dict(view, remaining_seconds=max(1, int(self.manual_override["expires_at"] - time.monotonic() + 0.999)))
+
+    def display_state(self, opencode_state=None):
+        return self.manual_view() or opencode_state
+
+    def set_manual_override(self, payload):
+        if not isinstance(payload, dict) or set(payload) - {"state", "label", "duration"}:
+            raise ValueError("Invalid manual state request")
+        state = payload.get("state")
+        label = payload.get("label", "Web test")
+        duration = payload.get("duration", MANUAL_DEFAULT_SECONDS)
+        if state not in STATES:
+            raise ValueError("Unknown state")
+        if (not isinstance(label, str) or len(label) > 24
+                or any(not 32 <= ord(char) <= 126 for char in label)):
+            raise ValueError("Label must contain at most 24 printable ASCII characters")
+        if type(duration) is not int or not 1 <= duration <= MANUAL_MAX_SECONDS:
+            raise ValueError("Duration must be between 1 and %d seconds" % MANUAL_MAX_SECONDS)
+        self.manual_override = {"state": state, "label": label,
+                                "expires_at": time.monotonic() + duration}
+        return {"state": state, "label": label, "duration": duration}
+
+    def update_device_status(self, response):
+        if not isinstance(response, dict):
+            return
+        for key in ("pet", "sd", "transport", "firmware", "orientation"):
+            if key in response:
+                self.device_status[key] = response[key]
+
+    def local_pet_catalog(self, refresh=False):
+        if self.pet_catalog_cache is not None and not refresh:
+            return self.pet_catalog_cache
+        root = self.pet_root
+        if not root.is_dir():
+            self.pet_catalog_cache = {"pets": [], "packs": {}}
+            return self.pet_catalog_cache
+        result, packs = [], {}
+        for folder in sorted(root.iterdir(), key=lambda item: item.name):
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            try:
+                pet_id, manifest, _filenames = inspect_pack(folder)
+                if pet_id != folder.name or folder.resolve().parent != root.resolve():
+                    continue
+                animations = manifest["animations"]
+                preview_data = {"folder": folder, "manifest": manifest}
+                packs[pet_id] = preview_data
+                result.append({
+                    "id": pet_id,
+                    "name": pet_id.replace("-", " ").title(),
+                    "animations": len(animations),
+                    "frames": sum(item.get("frames", 0) for item in animations.values()),
+                    "size_bytes": sum(item["bytes"] for item in animations.values()),
+                    "active": pet_id == self.device_status.get("pet"),
+                })
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+        self.pet_catalog_cache = {"pets": result, "packs": packs}
+        return self.pet_catalog_cache
+
+    def local_pets(self, refresh=False):
+        return self.local_pet_catalog(refresh)["pets"]
+
+    def local_pet_preview(self, pet_id, state="idle"):
+        pet_id = valid_id(pet_id)
+        if state not in STATES + ("offline", "pairing"):
+            raise ValueError("Unknown pet preview state")
+        pack = self.local_pet_catalog()["packs"].get(pet_id)
+        if pack is None:
+            raise ValueError("No valid local pack named " + pet_id)
+        folder, manifest = pack["folder"], pack["manifest"]
+        clip = manifest["states"].get(state, manifest["states"]["idle"])
+        animation = manifest["animations"][clip]
+        width, height = manifest["width"], manifest["height"]
+        frame_bytes = width * height * 2
+        frame_count = min(animation["frames"], 16)
+        path = folder / animation["file"]
+        with path.open("rb") as handle:
+            data = handle.read(frame_bytes * frame_count)
+        if len(data) != frame_bytes * frame_count:
+            raise ValueError("Incomplete pet preview frame")
+        frames = [base64.b64encode(data[offset:offset + frame_bytes]).decode("ascii")
+                  for offset in range(0, len(data), frame_bytes)]
+        return {"pet": pet_id, "state": state, "width": width, "height": height,
+                "frame_ms": animation["frame_ms"], "frames": frames}
+
+    def _run_pc_pet(self, *arguments):
+        command = [sys.executable, "-u", "-m", "pc.pet"] + list(arguments)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    timeout=300, check=False)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("Pet installation timed out") from error
+        if result.returncode:
+            detail = (result.stderr or result.stdout or "Installer failed").strip()
+            raise RuntimeError(detail[-1200:])
+
+    def _install_local_pet(self, pet_id, port):
+        folder = self.pet_root / pet_id
+        self._run_pc_pet("install", str(folder), "--port", port, "--replace")
+
+    def _activate_local_pet(self, pet_id, port):
+        self._run_pc_pet("activate", pet_id, "--port", port)
+
+    async def run_local_pet_action(self, pet_id, action):
+        pet_id = valid_id(pet_id)
+        packs = {item["id"] for item in self.local_pets()}
+        if pet_id not in packs:
+            raise ValueError("No valid local pack named " + pet_id)
+        async with self.pet_install_lock:
+            if not self.usb_connected or self.usb_link is None or self.usb_port is None:
+                raise ValueError("USB device is not connected")
+            if not self.device_status.get("sd"):
+                raise ValueError("SD card is not detected by the ESP32")
+            link, port = self.usb_link, self.usb_port
+            self.pet_installing = True
+            self.usb_resume.clear()
+            try:
+                link.disconnected.set()
+                await asyncio.to_thread(link.close)
+                await asyncio.wait_for(self.usb_disconnected.wait(), timeout=10)
+                operation = self._install_local_pet if action == "install" else self._activate_local_pet
+                await asyncio.to_thread(operation, pet_id, port)
+                self.device_status.update({"pet": pet_id, "sd": True})
+                return {"installed" if action == "install" else "activated": pet_id}
+            finally:
+                self.pet_installing = False
+                self.usb_resume.set()
+
+    async def install_local_pet(self, pet_id):
+        return await self.run_local_pet_action(pet_id, "install")
+
+    async def activate_local_pet(self, pet_id):
+        return await self.run_local_pet_action(pet_id, "activate")
+
+    async def device_status_worker(self):
+        while True:
+            link = self.usb_link or self.ble_link
+            if link is None:
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                self.update_device_status(await link.request("status"))
+            except (BleakError, ConnectionError, OSError, TimeoutError, ValueError):
+                pass
+            await asyncio.sleep(3)
+
     async def handle(self, reader, writer):
         status, response = 400, {"error": "Invalid request"}
+        content_type = "application/json; charset=utf-8"
         try:
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(3) as request_timeout:
                 raw = await reader.readuntil(b"\r\n\r\n")
                 lines = raw.decode("ascii").split("\r\n")
                 method, path, version = lines[0].split(" ")
@@ -198,14 +384,29 @@ class Bridge:
                     if key in headers:
                         raise ValueError("Duplicate header")
                     headers[key] = value.strip()
-                if headers.get("host") != "127.0.0.1:%d" % self.port or "origin" in headers:
+                expected_host = "127.0.0.1:%d" % self.port
+                expected_origin = "http://" + expected_host
+                if (headers.get("host") != expected_host
+                        or headers.get("origin") not in (None, expected_origin)):
                     status, response = 403, {"error": "Loopback clients only"}
+                elif method == "GET" and path == "/":
+                    status, response = 200, PAGE
+                    content_type = "text/html; charset=utf-8"
                 elif not hmac.compare_digest(headers.get("authorization", ""), "Bearer " + self.token):
                     status, response = 401, {"error": "Authentication required"}
                 elif "transfer-encoding" in headers:
                     status, response = 400, {"error": "Chunked requests are not supported"}
                 elif method == "GET" and path == "/health":
                     status, response = 200, self.health()
+                elif method == "GET" and path == "/pets":
+                    status, response = 200, {"pets": self.local_pets(refresh=True),
+                                             "sd": self.device_status.get("sd", False),
+                                             "usb_connected": self.usb_connected}
+                elif method == "GET" and path.startswith("/pet-preview/"):
+                    parts = path[len("/pet-preview/"):].split("/", 1)
+                    pet_id = parts[0]
+                    state = parts[1] if len(parts) == 2 else "idle"
+                    status, response = 200, self.local_pet_preview(pet_id, state)
                 elif method == "POST" and path == "/stop":
                     status, response = 200, {"stopping": True}
                     self.stopped.set()
@@ -219,13 +420,62 @@ class Bridge:
                         payload = json.loads(await reader.readexactly(length))
                         accepted = self.registry.update(payload)
                         status, response = 200, {"accepted": accepted}
+                elif method == "POST" and path == "/manual-state":
+                    if not self.usb_connected and not self.ble_connected:
+                        status, response = 409, {"error": "No OpenBuddy device is connected"}
+                    else:
+                        length = int(headers.get("content-length", "-1"))
+                        if not 0 < length <= 1024:
+                            status, response = 413, {"error": "Invalid body size"}
+                        elif headers.get("content-type", "").split(";")[0] != "application/json":
+                            status, response = 415, {"error": "JSON required"}
+                        else:
+                            payload = json.loads(await reader.readexactly(length))
+                            response = self.set_manual_override(payload)
+                            status = 200
+                elif method == "POST" and path == "/manual-state/clear":
+                    self.manual_override = None
+                    status, response = 200, {"cleared": True}
+                elif method == "POST" and path == "/pet/next":
+                    if not self.usb_connected or self.usb_link is None:
+                        status, response = 409, {"error": "Pet switching requires a connected USB device"}
+                    else:
+                        response = await self.usb_link.request("pet_next")
+                        self.update_device_status(response)
+                        status = 200
+                elif method == "POST" and path in ("/pets/install", "/pets/activate"):
+                    action = "install" if path.endswith("/install") else "activate"
+                    if not self.usb_connected or self.usb_link is None:
+                        status, response = 409, {"error": "Connect the ESP32 over USB to change the SD pet"}
+                    elif not self.device_status.get("sd"):
+                        status, response = 409, {"error": "SD card is not detected by the ESP32"}
+                    else:
+                        length = int(headers.get("content-length", "-1"))
+                        if not 0 < length <= 256:
+                            status, response = 413, {"error": "Invalid body size"}
+                        elif headers.get("content-type", "").split(";")[0] != "application/json":
+                            status, response = 415, {"error": "JSON required"}
+                        else:
+                            payload = json.loads(await reader.readexactly(length))
+                            if not isinstance(payload, dict) or set(payload) != {"pet"}:
+                                raise ValueError("Invalid pet selection request")
+                            try:
+                                operation = self.install_local_pet if action == "install" else self.activate_local_pet
+                                request_timeout.reschedule(asyncio.get_running_loop().time() + 330)
+                                response = await operation(payload["pet"])
+                                status = 200
+                            except ValueError as error:
+                                status, response = 409, {"error": str(error)}
+                            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                                status, response = 502, {"error": str(error)}
                 else:
                     status, response = 404, {"error": "Unknown endpoint"}
-        except (ValueError, UnicodeError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError):
-            pass
+        except (ValueError, TypeError, KeyError, UnicodeError,
+                asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError) as error:
+            response = {"error": str(error) or "Invalid request"}
         try:
-            body = json.dumps(response).encode()
-            writer.write(("HTTP/1.1 %d Result\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % (status, len(body))).encode() + body)
+            body = response.encode("utf-8") if isinstance(response, str) else json.dumps(response).encode()
+            writer.write(("HTTP/1.1 %d Result\r\nContent-Type: %s\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n" % (status, content_type, len(body))).encode() + body)
             await writer.drain()
         except (ConnectionError, OSError):
             pass
@@ -257,8 +507,9 @@ class Bridge:
                                        disconnected_callback=disconnected) as client:
                     link = Link(client, lambda event: print("Device event:", event.get("event"), "(read-only)", flush=True))
                     await client.start_notify(TX_UUID, link.notification)
-                    await link.request("status")
+                    self.update_device_status(await link.request("status"))
                     self.ble_connected = True
+                    self.ble_link = link
                     print("OpenBuddy BLE connected", flush=True)
                     await self.deliver_states(link)
                     raise ConnectionError("BLE connection closed")
@@ -266,35 +517,44 @@ class Bridge:
                 print("BLE unavailable:", type(error).__name__, "- retrying", flush=True)
             finally:
                 self.ble_connected = False
+                if self.ble_link is link:
+                    self.ble_link = None
             await asyncio.sleep(3)
 
     async def deliver_states(self, link):
         last, ping_at = None, 0
         while not link.disconnected.is_set():
-            view = self.registry.current()
-            if view is not None and self.quota.text:
+            manual_view = self.manual_view()
+            view = manual_view if manual_view is not None else self.registry.current()
+            if manual_view is None and view is not None and self.quota.text:
                 view = dict(view, info=self.quota.text)
             if view is None:
                 # No plugin lease: stop heartbeats so firmware becomes OFFLINE.
                 last = None
             elif view != last:
-                await link.request("state", **view)
+                response = await link.request("state", **view)
+                self.update_device_status(response)
                 self.last_delivered = dict(view)
                 last, ping_at = view, time.monotonic()
                 print("State:", view["state"], "-", view["label"], flush=True)
             elif time.monotonic() - ping_at >= 4:
-                await link.request("ping")
+                response = await link.request("ping")
+                self.update_device_status(response)
                 ping_at = time.monotonic()
             await asyncio.sleep(0.25)
 
     async def usb_worker(self):
         while True:
+            await self.usb_resume.wait()
             link = None
             try:
                 port = await asyncio.to_thread(find_serial_port, self.serial_port)
                 link = await UsbLink.open(port, lambda event: print("Device event:", event.get("event"), "(read-only)", flush=True))
-                await link.request("status")
+                self.usb_disconnected.clear()
+                self.update_device_status(await link.request("status"))
                 self.usb_connected = True
+                self.usb_link = link
+                self.usb_port = port
                 print("OpenBuddy USB connected on", port, flush=True)
                 await self.deliver_states(link)
                 raise ConnectionError("USB connection closed")
@@ -302,11 +562,18 @@ class Bridge:
                 print("USB unavailable:", type(error).__name__, "-", error, "- retrying", flush=True)
             finally:
                 self.usb_connected = False
+                if self.usb_link is link:
+                    self.usb_link = None
+                    self.usb_port = None
                 if link is not None:
                     link.close()
+                self.usb_disconnected.set()
             await asyncio.sleep(3)
 
     async def close(self):
+        if self.status_worker is not None:
+            self.status_worker.cancel()
+            await asyncio.gather(self.status_worker, return_exceptions=True)
         if self.quota_worker is not None:
             self.quota_worker.cancel()
             await asyncio.gather(self.quota_worker, return_exceptions=True)

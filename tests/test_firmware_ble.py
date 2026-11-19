@@ -194,6 +194,13 @@ class FirmwareTests(unittest.TestCase):
         self.buddy._command({"v": 1, "id": 2147483647, "cmd": "status"}, self.now)
         self.assertLessEqual(len(self.buddy.outgoing[-1]), 257)
 
+    def test_pet_switching_is_usb_only(self):
+        self.connect()
+        self.command("pet_next")
+        response = firmware.json.loads(self.buddy.outgoing[-1])
+        self.assertEqual(response["event"], "error")
+        self.assertIn("USB", response["message"])
+
     def test_reconnect_clears_hid_arming_and_stale_frames(self):
         self.connect()
         self.command("hid_arm")

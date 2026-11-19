@@ -40,8 +40,9 @@ class BuddyUSB:
 
     kind = "usb"
 
-    def __init__(self, asset_status=None, console=None):
+    def __init__(self, asset_status=None, pet_next=None, console=None):
         self.asset_status = asset_status
+        self.pet_next = pet_next
         self.console = console if console is not None else Console()
         self.decoder = Decoder()
         self.state = "idle"
@@ -76,12 +77,19 @@ class BuddyUSB:
             command = validate_command(message)
             if command == "hid_arm":
                 raise ValueError("Keyboard is not available over USB")
+            pet_info = None
+            if command == "pet_next":
+                if self.pet_next is None:
+                    raise ValueError("Pet switching is not available")
+                pet_info = self.pet_next()
             if command == "state":
                 self.state = message["state"]
                 self.label = message.get("label", "")
                 self.info = message.get("info", "")
             self.last_seen = now
             response = {"event": "ack", "id": request_id, "state": self.state}
+            if pet_info is not None:
+                response.update(pet_info)
             if command == "status":
                 response.update({"secure": True, "hid": False, "transport": "usb",
                                  "orientation": "landscape", "firmware": FIRMWARE_VERSION})

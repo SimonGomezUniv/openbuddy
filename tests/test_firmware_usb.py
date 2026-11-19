@@ -79,6 +79,13 @@ class UsbFirmwareTests(unittest.TestCase):
         self.assertEqual((reply["transport"], reply["hid"], reply["pet"]), ("usb", False, "a" * 64))
         self.assertLessEqual(len(self.console.written), 257)
 
+    def test_pet_next_uses_callback_and_reports_selected_pet(self):
+        self.buddy.pet_next = lambda: {"pet": "creepy", "pet_index": 1, "pet_count": 2}
+        self.send(frame("pet_next", 9))
+        self.assertEqual(self.console.replies(), [{"v": 1, "event": "ack", "id": 9,
+                                                   "state": "idle", "pet": "creepy",
+                                                   "pet_index": 1, "pet_count": 2}])
+
     def test_keyboard_arming_is_refused(self):
         self.send(frame("hid_arm"))
         reply = self.console.replies()[0]

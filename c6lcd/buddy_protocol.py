@@ -3,7 +3,7 @@
 import json
 
 VERSION = 1
-FIRMWARE_VERSION = "0.4.0"
+FIRMWARE_VERSION = "0.5.0"
 DEVICE_NAME = "OpenBuddy"
 SERVICE_UUID = "c8ad0001-4f90-4ab8-9976-22401b7861b0"
 RX_UUID = "c8ad0002-4f90-4ab8-9976-22401b7861b0"
@@ -29,7 +29,7 @@ def validate_command(message):
     if type(request_id) is not int or not 0 <= request_id <= 2_147_483_647:
         raise ValueError("Invalid request id")
     command = message.get("cmd")
-    if command not in ("ping", "status", "state", "hid_arm"):
+    if command not in ("ping", "status", "state", "hid_arm", "pet_next"):
         raise ValueError("Unknown command")
     if command == "state":
         if message.get("state") not in STATES:

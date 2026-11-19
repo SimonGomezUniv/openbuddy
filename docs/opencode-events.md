@@ -94,6 +94,18 @@ indiquer `COMx`. Le port est ouvert avec DTR/RTS à l'état bas pour ne pas
 redémarrer la carte. **Un seul programme à la fois** peut utiliser le port : arrêter
 le pont avant `mpremote`, `pc.deploy` ou `pc.pet`. `status` ajoute `usb_connected`.
 
+Le tableau de bord compact est servi par le bridge existant : lancer `python -m pc.webtest`
+dans un second terminal pour l'ouvrir. Il affiche l'état OpenCode et le pet, liste les
+packs locaux validés sous `build/pets/`, peut installer un pack en un clic si une SD
+est détectée, et activer un pack déjà sur la SD sans recopier ses images. L'aperçu
+web animé suit l'état affiché, mais son pack est choisi indépendamment du pet sur
+l'ESP32. Le bridge
+libère COM pendant l'opération puis se reconnecte. La page
+permet aussi un aperçu d'état temporaire (15 s par défaut, réglable de 1 à 3600 s),
+puis revient à l'état OpenCode courant ou permet d'y revenir immédiatement. L'aperçu
+est visuel : il n'approuve aucune permission et ne déclenche pas les notifications.
+Ne pas démarrer un second serveur série sur le port de l'ESP32.
+
 Le firmware pilote l'écran avec le transport USB s'il a reçu une commande valide
 dans les 15 dernières secondes ; sinon il revient à l'affichage BLE. Les deux
 transports peuvent coexister, mais n'utilisez qu'un pont à la fois. Pour mettre à

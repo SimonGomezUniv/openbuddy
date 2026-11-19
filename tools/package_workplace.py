@@ -21,6 +21,8 @@ FILES = {
     "pc/__init__.py": "pc/__init__.py",
     "pc/buddy.py": "pc/buddy.py",
     "pc/opencode.py": "pc/opencode.py",
+    "pc/webtest.py": "pc/webtest.py",
+    "pc/webui.py": "pc/webui.py",
     "pc/notifications.py": "pc/notifications.py",
     "pc/toasts.py": "pc/toasts.py",
     "pc/quota.py": "pc/quota.py",
@@ -55,7 +57,10 @@ def files_for(variant):
         files["README.md"] = "distribution/workplace/README-usb.md"
         files["requirements.txt"] = files["pc/requirements.txt"] = requirements_path(variant)
         files["pc/deploy.py"] = "pc/deploy.py"
+        files["pc/pet.py"] = "pc/pet.py"
         for name in ("openbuddy-usb.cmd", "openbuddy-usb-stop.cmd"):
+            files["tools/" + name] = "tools/" + name
+        for name in ("prepare_pet_sd.py", "prepare_pet_activate.py", "verify_pet_sd.py"):
             files["tools/" + name] = "tools/" + name
         for name in FIRMWARE_FILES:
             files["c6lcd/" + name] = "c6lcd/" + name

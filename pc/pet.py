@@ -151,29 +151,62 @@ def convert_command(args):
     print("Preview:", output / "preview.png")
 
 
-def install(args):
-    folder = Path(args.pack).resolve()
+def inspect_pack(folder):
+    """Validate every local pack file and return its manifest and safe file list."""
+    folder = Path(folder).resolve()
+    if not folder.is_dir():
+        raise ValueError("Pack directory not found")
     manifest_path = folder / "manifest.json"
     if manifest_path.stat().st_size > 8192:
         raise ValueError("Manifest too large")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("Invalid pet manifest")
     pet_id = valid_id(manifest["id"])
-    if manifest.get("version") != 1 or manifest.get("format") != "RGB565-BE":
+    animations = manifest.get("animations")
+    width, height = manifest.get("width"), manifest.get("height")
+    states = manifest.get("states")
+    if (manifest.get("version") != 1 or manifest.get("format") != "RGB565-BE"
+            or type(width) is not int or type(height) is not int
+            or not 1 <= width <= 104 or not 1 <= height <= 104
+            or manifest.get("background") != list(BACKGROUND)
+            or not isinstance(animations, dict) or not 1 <= len(animations) <= 16
+            or not isinstance(states, dict)):
         raise ValueError("Unsupported pack")
+    for state, clip in STATE_CLIPS.items():
+        if not isinstance(states.get(state), str) or states[state] not in animations:
+            raise ValueError("Pack is missing state: " + state)
     filenames = []
-    for animation in manifest["animations"].values():
+    for clip, animation in animations.items():
+        if not isinstance(clip, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", clip) or not isinstance(animation, dict):
+            raise ValueError("Invalid animation entry")
         name = animation["file"]
-        if not re.fullmatch(r"[a-z0-9-]+\.rgb565", name):
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9-]+\.rgb565", name):
             raise ValueError("Unsafe pack filename")
         path = folder / name
-        if path.stat().st_size != animation["bytes"]:
+        if path.is_symlink() or path.resolve().parent != folder:
+            raise ValueError("Unsafe pack file: " + name)
+        frames, frame_ms = animation.get("frames"), animation.get("frame_ms")
+        expected = animation.get("bytes")
+        if (type(frames) is not int or not 1 <= frames <= 64
+                or type(frame_ms) is not int or not 100 <= frame_ms <= 2000
+                or type(expected) is not int or expected != width * height * 2 * frames
+                or path.stat().st_size != expected):
             raise ValueError("Size mismatch: " + name)
-        if hashlib.sha256(path.read_bytes()).hexdigest() != animation["sha256"]:
+        digest = animation.get("sha256")
+        if (not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+                or hashlib.sha256(path.read_bytes()).hexdigest() != digest):
             raise ValueError("Checksum mismatch: " + name)
         if name not in filenames:
             filenames.append(name)
-    root = Path(__file__).resolve().parents[1]
+    return pet_id, manifest, filenames
+
+
+def install(args):
+    folder = Path(args.pack).resolve()
+    pet_id, manifest, filenames = inspect_pack(folder)
     target = ":/sd/openbuddy/pets/" + pet_id + "/"
+    root = Path(__file__).resolve().parents[1]
     command = [sys.executable, "-u", "-m", "mpremote", "connect", args.port,
                "exec", "PACK_ID=%r; REPLACE=%r" % (pet_id, args.replace),
                "+", "run", str(root / "tools/prepare_pet_sd.py")]
@@ -185,6 +218,21 @@ def install(args):
         subprocess.run(command, check=True)
     finally:
         # Also restart after an interrupted transfer; never leave the companion in REPL.
+        subprocess.run([sys.executable, "-m", "mpremote", "connect", args.port, "reset"],
+                       timeout=20, check=False)
+
+
+def activate(args):
+    pet_id = valid_id(args.pet)
+    root = Path(__file__).resolve().parents[1]
+    command = [sys.executable, "-u", "-m", "mpremote", "connect", args.port,
+               "exec", "PACK_ID=%r" % pet_id,
+               "+", "run", str(root / "tools/prepare_pet_activate.py"),
+               "+", "run", str(root / "tools/verify_pet_sd.py")]
+    print("Activating the existing SD pack; no animation files are copied.", flush=True)
+    try:
+        subprocess.run(command, check=True)
+    finally:
         subprocess.run([sys.executable, "-m", "mpremote", "connect", args.port, "reset"],
                        timeout=20, check=False)
 
@@ -201,13 +249,18 @@ def main():
     installation.add_argument("pack")
     installation.add_argument("--port", default="COM9")
     installation.add_argument("--replace", action="store_true", help="Replace an existing OpenBuddy pack")
+    activation = commands.add_parser("activate", help="Activate an already-installed SD pet without copying files")
+    activation.add_argument("pet", help="Pet ID to select from the external SD")
+    activation.add_argument("--port", default="COM9")
     args = parser.parse_args()
     try:
         if args.command == "convert":
             convert_command(args)
+        elif args.command == "activate":
+            activate(args)
         else:
             install(args)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         parser.exit(1, "Error: %s\n" % error)
 
 

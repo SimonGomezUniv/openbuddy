@@ -110,10 +110,8 @@ python -m pc.buddy hid-test
 ```
 
 Cette commande **arme** le test pendant 15 secondes mais n'envoie aucune touche.
-Mettre au premier plan un outil de test clavier, puis faire un **appui court sur
-BOOT** : une seule touche **F13** est envoyée, suivie de son relâchement. Le test
-est ensuite désarmé. F13 peut avoir un raccourci configuré sur le PC : utiliser un
-contexte de test adapté.
+Le raccourci BOOT n'envoie pas de touche : un appui court fait défiler les pets
+installés. Aucune touche n'est envoyée par le firmware actuel.
 
 Aucune touche n'est envoyée au démarrage, à l'appairage ou à la reconnexion. Les
 futures validations OpenCode passeront par le canal GATT et l'API, pas par `Entrée`.
@@ -135,7 +133,8 @@ borne sa mémoire et se resynchronise sur LF après une trame invalide/trop long
 {"v":1,"id":1,"event":"ack","state":"working"}
 ```
 
-Autres commandes : `ping`, `status`, `hid_arm`. Les libellés sont limités à 24
+Autres commandes BLE : `ping`, `status`, `hid_arm`. La commande USB `pet_next`
+change le pet en mémoire sans écrire sur la SD. Les libellés sont limités à 24
 caractères ; la police de diagnostic affiche les caractères non ASCII avec `?`.
 Les erreurs de commande portent le même `id`. Les événements bouton n'en ont pas.
 Ce protocole n'exécute ni code, ni commande shell, ni écriture de fichier distant.

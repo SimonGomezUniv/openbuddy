@@ -7,6 +7,10 @@ LED RVB WS2812 et emplacement microSD. Ne pas confondre avec la variante Touch.
 Le projet utilise MicroPython `ESP32_GENERIC_C6` 1.29.0, sans compilation C.
 
 Orientation retenue : **landscape 320×172, USB-C à gauche**.
+Un appui court sur BOOT fait défiler les packs de pet disponibles sur la SD ;
+l'appui long de 3 s reste réservé à l'ouverture de l'appairage BLE. Le choix du
+bouton est temporaire et n'écrit pas sur la carte : au redémarrage, le pack indiqué
+par `/sd/openbuddy/active.json` est chargé.
 
 | Fonction | GPIO |
 |---|---|

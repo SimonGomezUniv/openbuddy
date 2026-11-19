@@ -24,8 +24,42 @@ def read_json(path, limit):
     return value
 
 
+def validate_manifest(manifest, pet_id, root):
+    if (manifest.get("version") != 1 or manifest.get("format") != "RGB565-BE"
+            or manifest.get("id") != pet_id):
+        raise ValueError("Unsupported pet manifest")
+    width, height = manifest.get("width"), manifest.get("height")
+    if (type(width) is not int or type(height) is not int
+            or not 1 <= width <= 104 or not 1 <= height <= 104):
+        raise ValueError("Pet dimensions exceed the display stage")
+    if manifest.get("background") != [8, 12, 20]:
+        raise ValueError("Pet background does not match the UI")
+    animations, states = manifest.get("animations"), manifest.get("states")
+    if (not isinstance(animations, dict) or not 1 <= len(animations) <= 16
+            or not isinstance(states, dict)):
+        raise ValueError("Invalid pet animation table")
+    for state in STATES + ("offline", "pairing"):
+        if states.get(state) not in animations:
+            raise ValueError("Pet is missing a required state")
+    for name, animation in animations.items():
+        if not safe_name(name) or not isinstance(animation, dict):
+            raise ValueError("Invalid animation entry")
+        filename = animation.get("file", "")
+        if (not isinstance(filename, str) or not filename.endswith(".rgb565")
+                or not safe_name(filename[:-7])):
+            raise ValueError("Unsafe animation filename")
+        frames, delay = animation.get("frames"), animation.get("frame_ms")
+        if (type(frames) is not int or not 1 <= frames <= 64
+                or type(delay) is not int or not 100 <= delay <= 2000):
+            raise ValueError("Invalid animation timing")
+        expected = width * height * 2 * frames
+        if animation.get("bytes") != expected or os.stat(root + "/" + filename)[6] != expected:
+            raise ValueError("Incomplete pet animation")
+
+
 class PetPlayer:
-    def __init__(self, lcd, directory=cfg.PET_DIRECTORY, selection=cfg.PET_SELECTION):
+    def __init__(self, lcd, directory=cfg.PET_DIRECTORY, selection=cfg.PET_SELECTION,
+                 pet_id=None):
         self.lcd = lcd
         self.available = False
         self.error = None
@@ -42,7 +76,7 @@ class PetPlayer:
         self.max_read_us = 0
         self.pet_id = None
         try:
-            self.pet_id = read_json(selection, 256).get("pet")
+            self.pet_id = pet_id if pet_id is not None else read_json(selection, 256).get("pet")
             if not safe_name(self.pet_id):
                 raise ValueError("Unsafe selected pet id")
             self.root = directory + "/" + self.pet_id
@@ -62,36 +96,7 @@ class PetPlayer:
             self.disable(error)
 
     def _validate(self, manifest):
-        if (manifest.get("version") != 1 or manifest.get("format") != "RGB565-BE"
-                or manifest.get("id") != self.pet_id):
-            raise ValueError("Unsupported pet manifest")
-        width, height = manifest.get("width"), manifest.get("height")
-        if (type(width) is not int or type(height) is not int
-                or not 1 <= width <= 104 or not 1 <= height <= 104):
-            raise ValueError("Pet dimensions exceed the display stage")
-        if manifest.get("background") != [8, 12, 20]:
-            raise ValueError("Pet background does not match the UI")
-        animations, states = manifest.get("animations"), manifest.get("states")
-        if (not isinstance(animations, dict) or not 1 <= len(animations) <= 16
-                or not isinstance(states, dict)):
-            raise ValueError("Invalid pet animation table")
-        for state in STATES + ("offline", "pairing"):
-            if states.get(state) not in animations:
-                raise ValueError("Pet is missing a required state")
-        for name, animation in animations.items():
-            if not safe_name(name) or not isinstance(animation, dict):
-                raise ValueError("Invalid animation entry")
-            filename = animation.get("file", "")
-            if (not isinstance(filename, str) or not filename.endswith(".rgb565")
-                    or not safe_name(filename[:-7])):
-                raise ValueError("Unsafe animation filename")
-            frames, delay = animation.get("frames"), animation.get("frame_ms")
-            if (type(frames) is not int or not 1 <= frames <= 64
-                    or type(delay) is not int or not 100 <= delay <= 2000):
-                raise ValueError("Invalid animation timing")
-            expected = width * height * 2 * frames
-            if animation.get("bytes") != expected or os.stat(self.root + "/" + filename)[6] != expected:
-                raise ValueError("Incomplete pet animation")
+        validate_manifest(manifest, self.pet_id, self.root)
 
     def draw(self, state, now, force=False):
         if not self.available:
@@ -152,3 +157,34 @@ class PetPlayer:
             except OSError:
                 pass
             self.handle = None
+
+
+def available_pets(directory=cfg.PET_DIRECTORY):
+    """List safely named pet packs with a readable manifest on the mounted SD."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    result = []
+    for name in names:
+        if not safe_name(name):
+            continue
+        try:
+            manifest = read_json(directory + "/" + name + "/manifest.json", 8192)
+            validate_manifest(manifest, name, directory + "/" + name)
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+        result.append(name)
+    result.sort()
+    return result
+
+
+def next_pet_id(pets, current):
+    """Return the next sorted pet ID, wrapping around at the end."""
+    if not pets:
+        return None
+    try:
+        index = pets.index(current)
+    except ValueError:
+        return pets[0]
+    return pets[(index + 1) % len(pets)]

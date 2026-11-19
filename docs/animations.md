@@ -38,6 +38,12 @@ le service BLE. Au démarrage, le montage est tenté 3 fois ; tant que le pet es
 indisponible, le firmware retente toutes les 3 s (puis toutes les 30 s après 20
 essais) et redessine l'écran dès que la carte répond, sans redémarrage.
 
+Un appui court sur BOOT fait défiler les packs valides présents sous
+`/sd/openbuddy/pets/`. La page `pc.webtest` propose le même choix avec son bouton
+« Suivant » (commande USB `pet_next`). Le changement se fait en mémoire et ne modifie
+pas la SD montée en lecture seule ; au prochain redémarrage, le firmware reprend le
+pack désigné par `/sd/openbuddy/active.json`.
+
 ## Bus SPI partagé
 
 `shared_spi.py` crée **un seul** objet `machine.SPI`, avec MOSI 6, SCLK 7 et MISO 5.
@@ -93,6 +99,15 @@ La SD reste insérée dans l'ESP32. Vérifier le port série avant l'installatio
 python -m serial.tools.list_ports -v
 python -m pc.pet install build/pets/super-saiyan-goku-combat --port COM9
 ```
+
+Le tableau de bord `python -m pc.webtest`, lancé avec le bridge actif, liste aussi
+les packs locaux valides sous `build/pets/` et peut en installer un d'un clic si la
+SD est détectée. **Activer** re-sélectionne sur la SD un pack déjà installé, sans
+recopier les animations. L'aperçu web animé suit l'état OpenCode (ou l'aperçu
+temporaire), mais son pack est choisi indépendamment du pet actif sur l'ESP32 ; l'écran
+continue à utiliser le pet indiqué par `/sd/openbuddy/active.json`.
+Le bridge suspend sa liaison USB pendant installation/activation puis la reprend ;
+les autres packs ne sont pas supprimés. Aucun formatage automatique.
 
 L'installateur :
 

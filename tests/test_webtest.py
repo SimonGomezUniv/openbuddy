@@ -1,68 +1,37 @@
-import json
-from http.server import ThreadingHTTPServer
-import threading
 import unittest
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from unittest.mock import patch
 
-from pc.webtest import WebTestHandler
-
-
-class FakeDevice:
-    def __init__(self):
-        self.commands = []
-
-    def request(self, command, **fields):
-        self.commands.append((command, fields))
-        return {"event": "ack", "id": len(self.commands), "cmd": command, **fields}
+from pc.webui import PAGE, open_dashboard
 
 
-class WebTestHandlerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.device = FakeDevice()
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), WebTestHandler)
-        cls.server.device = cls.device
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
-        cls.base = "http://127.0.0.1:%d" % cls.server.server_port
+class WebDashboardTests(unittest.TestCase):
+    def test_dashboard_has_live_state_and_timed_override_controls(self):
+        self.assertIn("État en direct", PAGE)
+        self.assertIn("Affiché sur le pet", PAGE)
+        self.assertIn('value="15"', PAGE)
+        self.assertIn("/manual-state", PAGE)
+        self.assertIn("/manual-state/clear", PAGE)
+        self.assertIn("/health", PAGE)
+        self.assertIn("/pet/next", PAGE)
+        self.assertIn("Installer", PAGE)
+        self.assertIn("Activer", PAGE)
+        self.assertIn("pet-canvas", PAGE)
+        self.assertIn("/pets/activate", PAGE)
+        self.assertIn("preview-pet", PAGE)
+        self.assertIn("localStorage", PAGE)
+        self.assertIn("/pet-preview/", PAGE)
+        self.assertIn("Pet affiché sur le web", PAGE)
+        self.assertIn("activeDevicePet", PAGE)
+        self.assertIn("localStorage.setItem('openbuddy-web-preview-pet'", PAGE)
+        live_panel = PAGE.split("<h2>État en direct</h2>", 1)[1].split("</section>", 1)[0]
+        self.assertIn("pet-canvas", live_panel)
+        self.assertIn("preview-pet", live_panel)
+        self.assertNotIn("Aperçu web indépendant", PAGE)
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join()
-
-    def test_page_and_status_use_expected_device(self):
-        with urlopen(self.base + "/", timeout=2) as response:
-            self.assertIn("OpenBuddy", response.read().decode("utf-8"))
-        with urlopen(self.base + "/api/status", timeout=2) as response:
-            self.assertEqual(json.loads(response.read()), {"event": "ack", "id": 1, "cmd": "status"})
-        self.assertEqual(self.device.commands[-1], ("status", {}))
-
-    def test_state_command_is_forwarded_and_invalid_state_rejected(self):
-        body = json.dumps({"state": "thinking", "label": "Test"}).encode()
-        request = Request(self.base + "/api/state", data=body,
-                          headers={"Content-Type": "application/json"}, method="POST")
-        with urlopen(request, timeout=2) as response:
-            self.assertEqual(json.loads(response.read())["event"], "ack")
-        self.assertEqual(self.device.commands[-1],
-                         ("state", {"state": "thinking", "label": "Test"}))
-
-        body = b'{"state":"shell","label":"bad"}'
-        request = Request(self.base + "/api/state", data=body,
-                          headers={"Content-Type": "application/json"}, method="POST")
-        with self.assertRaises(HTTPError) as error:
-            urlopen(request, timeout=2)
-        self.assertEqual(error.exception.code, 400)
-
-    def test_cross_origin_post_is_rejected(self):
-        request = Request(self.base + "/api/state", data=b'{"state":"idle"}',
-                          headers={"Content-Type": "application/json",
-                                   "Origin": "http://example.invalid"}, method="POST")
-        with self.assertRaises(HTTPError) as error:
-            urlopen(request, timeout=2)
-        self.assertEqual(error.exception.code, 403)
+    def test_launcher_adds_discovery_token_in_fragment(self):
+        with patch("pc.webui.webbrowser.open", return_value=True) as open_browser:
+            self.assertTrue(open_dashboard("http://127.0.0.1:19847/", "a" * 64))
+        open_browser.assert_called_once_with("http://127.0.0.1:19847/#token=" + "a" * 64)
 
 
 if __name__ == "__main__":

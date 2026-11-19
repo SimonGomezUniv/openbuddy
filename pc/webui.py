@@ -49,7 +49,7 @@ PAGE = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1>OpenBuddy</h1><span id="connection" class="pill">Connexion…</span></header>
+  <header><h1>OpenBuddy</h1><div class="controls"><a id="pet-screen-link" class="pill" href="/pet">Vue écran ESP32</a><span id="connection" class="pill">Connexion…</span></div></header>
   <main class="layout">
     <div class="stack">
       <section class="card">
@@ -93,6 +93,7 @@ PAGE = r"""<!doctype html>
   <script>
     const token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
     history.replaceState(null, '', location.pathname);
+    document.querySelector('#pet-screen-link').href = '/pet#token=' + encodeURIComponent(token);
     const labels = {idle:'Prêt', thinking:'Réflexion', working:'En cours', permission:'Autorisation', question:'Question', success:'Succès', error:'Erreur', retry:'Nouvel essai'};
     const message = document.querySelector('#message');
     const stateButtons = document.querySelector('#states');
@@ -288,6 +289,123 @@ PAGE = r"""<!doctype html>
     document.querySelector('#preview-pet').addEventListener('change', event => chooseWebPet(event.target.value));
     Promise.all([refreshHealth(), loadPets()]).catch(showError);
     setInterval(() => refreshHealth().catch(showError), 1000);
+  </script>
+</body>
+</html>
+"""
+
+
+PET_PAGE = r"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenBuddy — miroir écran</title>
+  <style>
+    :root { color-scheme: dark; font: 14px/1.4 system-ui, sans-serif; background: #10131b; color: #edf2ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 18px; }
+    main { width: min(100%, 960px); }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    h1 { font-size: 1.15rem; margin: 0; } a { color: #b7c8ff; }
+    .screen { width: 100%; aspect-ratio: 320 / 172; border: 1px solid #46516a; border-radius: 12px; overflow: hidden; box-shadow: 0 16px 48px #0008; background: #080c14; }
+    canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+    #status { color: #aab4ca; margin-top: 9px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Miroir de l’écran OpenBuddy</h1><a id="dashboard-link" href="/">Tableau de bord</a></header>
+    <div class="screen"><canvas id="screen" width="320" height="172"></canvas></div>
+    <div id="status">Synchronisation…</div>
+  </main>
+  <script>
+    const token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
+    history.replaceState(null, '', location.pathname);
+    document.querySelector('#dashboard-link').href = '/#token=' + encodeURIComponent(token);
+    const canvas = document.querySelector('#screen'), ctx = canvas.getContext('2d');
+    const status = document.querySelector('#status');
+    const colors = {offline:[72,84,108], idle:[72,132,180], thinking:[70,116,255], working:[32,220,210], permission:[255,120,24], question:[255,210,40], success:[50,230,120], error:[255,55,60], retry:[220,140,32], pairing:[170,90,255]};
+    const labels = {offline:'OFFLINE', idle:'READY', thinking:'THINKING', working:'WORKING', permission:'PERMISSION', question:'QUESTION', success:'DONE', error:'ERROR', retry:'RETRY', pairing:'PAIRING'};
+    let pet = null, state = 'offline', detail = 'No Python bridge', info = 'USB SERIAL / v1';
+    let usbConnected = false, bleConnected = false;
+    let petFrames = null, petFrameMs = 260, previewKey = null, animationStarted = performance.now();
+    const cache = new Map();
+    async function api(path) {
+      const response = await fetch(path, {headers:{'Authorization':'Bearer ' + token}});
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || 'HTTP ' + response.status);
+      return value;
+    }
+    function rgb(value) { return 'rgb(' + value.join(',') + ')'; }
+    function drawFallback(accent, frame) {
+      const bob = frame % 2 && (state === 'thinking' || state === 'working') ? 3 : 0;
+      const x = 25, y = 55 + bob, bg = '#080c14';
+      ctx.fillStyle = bg; ctx.fillRect(16, 43, 82, 88);
+      ctx.fillStyle = accent;
+      ctx.fillRect(x + 28, y - 10, 5, 10); ctx.fillRect(x + 5, y, 56, 48);
+      ctx.fillRect(x, y + 10, 66, 30); ctx.fillRect(x + 10, y + 48, 12, 8); ctx.fillRect(x + 44, y + 48, 12, 8);
+      ctx.fillStyle = bg; ctx.fillRect(x + 10, y + 8, 46, 28); ctx.fillRect(x + 24, y + 43, 18, 3);
+      ctx.fillStyle = '#e1e9f5'; const eye = frame % 8 === 0 ? 2 : 8;
+      ctx.fillRect(x + 18, y + 17, 7, eye); ctx.fillRect(x + 41, y + 17, 7, eye);
+    }
+    function drawScreen() {
+      const accent = colors[state] || colors.offline, color = rgb(accent), bg = '#080c14';
+      const link = usbConnected ? 'USB LINK' : bleConnected ? 'BLE SECURE' : 'BLE WAIT';
+      const footer = usbConnected ? 'USB ACTIVE | BOOT: NEXT PET' : 'BOOT: NEXT PET | HOLD 3s: PAIR';
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, 320, 172);
+      ctx.fillStyle = color; ctx.fillRect(0, 0, 320, 3);
+      ctx.font = '12px monospace'; ctx.textBaseline = 'top'; ctx.fillStyle = '#e1e9f5'; ctx.fillText('OPENBUDDY', 12, 15);
+      ctx.fillStyle = '#788a9e'; ctx.fillText(link, 224, 15);
+      ctx.font = 'bold 22px monospace'; ctx.fillStyle = color; ctx.fillText(labels[state] || state.toUpperCase(), 124, 54);
+      ctx.font = '12px monospace'; ctx.fillStyle = '#e1e9f5'; ctx.fillText(detail.slice(0, 24), 124, 87);
+      ctx.fillStyle = '#788a9e'; ctx.fillText(info.slice(0, 24), 124, 113);
+      ctx.fillStyle = color; ctx.fillRect(12, 141, 296, 1);
+      ctx.fillStyle = '#788a9e'; ctx.fillText(footer, 12, 153);
+      if (petFrames && petFrames.length) {
+        const index = Math.floor((performance.now() - animationStarted) / petFrameMs) % petFrames.length;
+        const frame = petFrames[index], image = ctx.createImageData(pet.width, pet.height);
+        for (let source = 0, target = 0; source + 1 < frame.length; source += 2, target += 4) {
+          const value = (frame[source] << 8) | frame[source + 1];
+          const red = (value >> 11) & 31, green = (value >> 5) & 63, blue = value & 31;
+          image.data[target] = (red << 3) | (red >> 2);
+          image.data[target + 1] = (green << 2) | (green >> 4);
+          image.data[target + 2] = (blue << 3) | (blue >> 2);
+          image.data[target + 3] = 255;
+        }
+        ctx.putImageData(image, 8 + Math.floor((104 - pet.width) / 2), 35 + Math.floor((104 - pet.height) / 2));
+      } else {
+        drawFallback(color, Math.floor(performance.now() / 350));
+      }
+    }
+    async function refresh() {
+      try {
+        const health = await api('/health');
+        const nextState = health.display_state?.state || 'offline';
+        const nextPet = health.pet || null;
+        usbConnected = Boolean(health.usb_connected);
+        bleConnected = Boolean(health.ble_connected);
+        const changed = nextState !== state || nextPet !== (pet && pet.id);
+        state = nextState;
+        detail = health.display_state?.label || (state === 'offline' ? 'No Python bridge' : 'Awaiting events');
+        info = health.manual_override || state === 'offline' ? (nextPet ? 'PET: ' + nextPet : usbConnected ? 'USB SERIAL / v1' : 'PET / MICROSD') : health.quota || (nextPet ? 'PET: ' + nextPet : usbConnected ? 'USB SERIAL / v1' : 'HID + GATT / v1');
+        if (changed) {
+          pet = null; petFrames = null; previewKey = null;
+          if (nextPet) {
+            const key = nextPet + ':' + state;
+            try {
+              let preview = cache.get(key);
+              if (!preview) { preview = await api('/pet-preview/' + encodeURIComponent(nextPet) + '/' + encodeURIComponent(state)); cache.set(key, preview); if (cache.size > 8) cache.delete(cache.keys().next().value); }
+              pet = preview; petFrames = preview.frames.map(frame => Uint8Array.from(atob(frame), char => char.charCodeAt(0)));
+              petFrameMs = preview.frame_ms; previewKey = key; animationStarted = performance.now();
+            } catch (_) { pet = null; petFrames = null; }
+          }
+        }
+        status.textContent = (health.usb_connected ? 'USB connecté' : health.ble_connected ? 'Bluetooth connecté' : 'ESP32 déconnecté') + ' · état ' + (labels[state] || state.toUpperCase()) + (nextPet ? ' · ' + nextPet : '');
+      } catch (error) { status.textContent = 'Bridge indisponible : ' + error.message; }
+      drawScreen();
+    }
+    refresh(); setInterval(refresh, 1000); setInterval(drawScreen, 100);
   </script>
 </body>
 </html>

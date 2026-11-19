@@ -64,8 +64,8 @@ Dans OpenCode, `/reload` si le plugin n'apparaît pas.
 
 ## 4. Mettre le firmware à jour (USB)
 
-Le mode USB exige le **firmware 0.5.0** pour le changement de pet depuis le tableau
-de bord. Brancher l'ESP32, puis :
+Le mode USB exige le **firmware 0.6.0** pour le miroir d'écran exact. Brancher
+l'ESP32, puis :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pc.buddy --serial auto scan
@@ -81,7 +81,7 @@ OpenBuddy. Vérification :
 .\.venv\Scripts\python.exe -m pc.buddy --serial auto status
 ```
 
-La réponse doit contenir `"transport": "usb"` et `"firmware": "0.5.0"`.
+La réponse doit contenir `"transport": "usb"` et `"firmware": "0.6.0"`.
 Pour tester les animations : `.\.venv\Scripts\python.exe -m pc.buddy --serial auto demo`.
 
 ## 5. Lancer le compagnon

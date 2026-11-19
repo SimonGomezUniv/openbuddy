@@ -105,6 +105,8 @@ permet aussi un aperçu d'état temporaire (15 s par défaut, réglable de 1 à 
 puis revient à l'état OpenCode courant ou permet d'y revenir immédiatement. L'aperçu
 est visuel : il n'approuve aucune permission et ne déclenche pas les notifications.
 Ne pas démarrer un second serveur série sur le port de l'ESP32.
+Le lien **Vue écran ESP32** ouvre `/pet`, un miroir du cadrage paysage 320×172 avec
+le libellé READY/WORKING/etc., sa couleur et l'animation du pack actif.
 
 Le firmware pilote l'écran avec le transport USB s'il a reçu une commande valide
 dans les 15 dernières secondes ; sinon il revient à l'affichage BLE. Les deux

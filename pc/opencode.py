@@ -26,7 +26,7 @@ from pc.notifications import SOUND_ALIASES, SoundNotifier
 from pc.pet import inspect_pack, valid_id
 from pc.quota import QuotaMonitor
 from pc.toasts import DesktopNotifier
-from pc.webui import PAGE
+from pc.webui import PAGE, PET_PAGE
 
 LEASE_SECONDS = 12
 MANUAL_DEFAULT_SECONDS = 15
@@ -153,6 +153,8 @@ class Bridge:
         self.pet_root = Path(__file__).resolve().parents[1] / "build" / "pets"
         self.pet_catalog_cache = None
         self.device_status = {"pet": None, "sd": False}
+        self.device_view = None
+        self.device_last_seen_at = None
         self.notifier = SoundNotifier(muted=mute)
         self.desktop_notifier = DesktopNotifier(disabled=no_notifications)
         self.sound_worker = None
@@ -221,7 +223,15 @@ class Bridge:
         return dict(view, remaining_seconds=max(1, int(self.manual_override["expires_at"] - time.monotonic() + 0.999)))
 
     def display_state(self, opencode_state=None):
-        return self.manual_view() or opencode_state
+        manual = self.manual_view()
+        if manual is not None:
+            return manual
+        if opencode_state is not None:
+            return opencode_state
+        if (self.device_view is not None and self.device_last_seen_at is not None
+                and time.monotonic() - self.device_last_seen_at < 15):
+            return dict(self.device_view)
+        return {"state": "offline", "label": "No Python bridge"}
 
     def set_manual_override(self, payload):
         if not isinstance(payload, dict) or set(payload) - {"state", "label", "duration"}:
@@ -342,6 +352,8 @@ class Bridge:
                 operation = self._install_local_pet if action == "install" else self._activate_local_pet
                 await asyncio.to_thread(operation, pet_id, port)
                 self.device_status.update({"pet": pet_id, "sd": True})
+                self.device_view = None
+                self.device_last_seen_at = None
                 return {"installed" if action == "install" else "activated": pet_id}
             finally:
                 self.pet_installing = False
@@ -389,8 +401,8 @@ class Bridge:
                 if (headers.get("host") != expected_host
                         or headers.get("origin") not in (None, expected_origin)):
                     status, response = 403, {"error": "Loopback clients only"}
-                elif method == "GET" and path == "/":
-                    status, response = 200, PAGE
+                elif method == "GET" and path in ("/", "/pet"):
+                    status, response = 200, PAGE if path == "/" else PET_PAGE
                     content_type = "text/html; charset=utf-8"
                 elif not hmac.compare_digest(headers.get("authorization", ""), "Bearer " + self.token):
                     status, response = 401, {"error": "Authentication required"}
@@ -442,6 +454,9 @@ class Bridge:
                     else:
                         response = await self.usb_link.request("pet_next")
                         self.update_device_status(response)
+                        if self.device_view is None:
+                            self.device_view = {"state": response.get("state", "idle"), "label": ""}
+                        self.device_last_seen_at = time.monotonic()
                         status = 200
                 elif method == "POST" and path in ("/pets/install", "/pets/activate"):
                     action = "install" if path.endswith("/install") else "activate"
@@ -534,12 +549,15 @@ class Bridge:
             elif view != last:
                 response = await link.request("state", **view)
                 self.update_device_status(response)
+                self.device_view = dict(view)
+                self.device_last_seen_at = time.monotonic()
                 self.last_delivered = dict(view)
                 last, ping_at = view, time.monotonic()
                 print("State:", view["state"], "-", view["label"], flush=True)
             elif time.monotonic() - ping_at >= 4:
                 response = await link.request("ping")
                 self.update_device_status(response)
+                self.device_last_seen_at = time.monotonic()
                 ping_at = time.monotonic()
             await asyncio.sleep(0.25)
 

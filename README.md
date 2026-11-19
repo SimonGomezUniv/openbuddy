@@ -56,7 +56,8 @@ automatiquement : les réponses restent dans OpenCode.
 | Boutons et clavier | Aucun événement bouton ni HID transmis ; BOOT fait défiler les pets localement | BOOT court fait défiler les pets ; appui long puis confirmation pour l'appairage ; pas d'événement bouton ni de F13 |
 
 Le mode USB requiert le **firmware 0.3.0** ou plus (0.4.0 pour le quota, 0.5.0
-pour le changement de pet). Le firmware conserve aussi le BLE :
+pour le changement de pet, 0.6.0 pour que les interrogations de statut ne prolongent
+pas artificiellement l'état à l'écran). Le firmware conserve aussi le BLE :
 le choix du transport se fait au lancement du pont. En USB, un seul outil peut
 utiliser le port série à la fois. En Bluetooth, le buddy accepte un seul hôte à
 la fois. Les autorisations USB/Bluetooth du système restent applicables.
@@ -115,6 +116,8 @@ La page permet aussi de faire défiler les pets par USB et de prévisualiser un 
 courant ou immédiat. L'aperçu ne répond jamais aux permissions et ne déclenche pas
 les notifications Windows. Le serveur reste sur `127.0.0.1` et utilise le processus
 et le port du bridge.
+Le lien **Vue écran ESP32** ouvre aussi `/pet`, un miroir 320×172 qui reprend la
+couleur, le libellé et l'animation correspondant à l'état affiché sur la carte.
 
 Si le firmware doit être mis à jour, arrêter d'abord le pont et les autres outils
 série, puis :

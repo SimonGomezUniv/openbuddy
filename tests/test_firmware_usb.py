@@ -78,6 +78,15 @@ class UsbFirmwareTests(unittest.TestCase):
         reply = self.console.replies()[0]
         self.assertEqual((reply["transport"], reply["hid"], reply["pet"]), ("usb", False, "a" * 64))
         self.assertLessEqual(len(self.console.written), 257)
+        self.assertFalse(self.buddy.online(self.now))
+
+    def test_status_poll_does_not_refresh_an_existing_display_lease(self):
+        self.send(frame("state", state="working"))
+        self.now += 14999
+        self.send(frame("status", 2))
+        self.assertTrue(self.buddy.online(self.now))
+        self.now += 2
+        self.assertFalse(self.buddy.online(self.now))
 
     def test_pet_next_uses_callback_and_reports_selected_pet(self):
         self.buddy.pet_next = lambda: {"pet": "creepy", "pet_index": 1, "pet_count": 2}

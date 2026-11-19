@@ -103,6 +103,14 @@ class HTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/manual-state", page)
         self.assertIn('value="15"', page)
 
+    async def test_pet_mirror_page_shows_esp32_states_and_local_animation(self):
+        status, page = await self.request("GET", "/pet")
+        self.assertEqual(status, 200)
+        for label in ("READY", "WORKING", "PERMISSION", "QUESTION", "DONE", "ERROR", "RETRY"):
+            self.assertIn(label, page)
+        self.assertIn("/pet-preview/", page)
+        self.assertIn("width=\"320\" height=\"172\"", page)
+
     async def test_manual_state_temporarily_overrides_and_returns_to_opencode(self):
         self.bridge.usb_connected = True
         self.bridge.registry.update(message(state="working"))

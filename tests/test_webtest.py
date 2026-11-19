@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from pc.webui import PAGE, open_dashboard
+from pc.webui import PAGE, PET_PAGE, open_dashboard
 
 
 class WebDashboardTests(unittest.TestCase):
@@ -27,6 +27,13 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("pet-canvas", live_panel)
         self.assertIn("preview-pet", live_panel)
         self.assertNotIn("Aperçu web indépendant", PAGE)
+
+    def test_pet_mirror_page_maps_display_states_to_lcd_colors(self):
+        for label in ("READY", "WORKING", "PERMISSION", "QUESTION", "DONE", "ERROR", "RETRY"):
+            self.assertIn(label, PET_PAGE)
+        self.assertIn("aspect-ratio: 320 / 172", PET_PAGE)
+        self.assertIn("/pet-preview/", PET_PAGE)
+        self.assertIn("getContext('2d')", PET_PAGE)
 
     def test_launcher_adds_discovery_token_in_fragment(self):
         with patch("pc.webui.webbrowser.open", return_value=True) as open_browser:

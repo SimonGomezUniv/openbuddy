@@ -22,7 +22,7 @@ Lire d'abord `docs/hardware.md` (matériel, brochage, pièges), `docs/opencode-e
 - `pc/buddy.py` : diagnostic BLE Python/Bleak, `python -m pc.buddy` depuis la racine.
 - `pc/pet.py` : conversion Codex Pets et installation USB vérifiée ; `pc/deploy.py` : déploiement firmware sans effacement.
 - `pc/opencode.py` : pont événements → carte, démarrage `python -m pc.opencode`, diagnostic/arrêt avec `status`/`stop`.
-- `pc/webui.py` : tableau de bord local servi par le bridge ; `pc.webtest` ouvre le tableau de bord existant, n'ouvre pas le port série. L'aperçu du pet est choisi indépendamment du pet de l'ESP32. Les packs locaux validés peuvent s'installer ou être activés en un clic si la SD est détectée ; le bridge suspend puis reprend sa liaison USB.
+- `pc/webui.py` : tableau de bord local et miroir `/pet` servis par le bridge ; `pc.webtest` ouvre le tableau de bord existant, n'ouvre pas le port série. L'aperçu du pet est choisi indépendamment du pet de l'ESP32. Les packs locaux validés peuvent s'installer ou être activés en un clic si la SD est détectée ; le bridge suspend puis reprend sa liaison USB.
 - Mode USB : `python -m pc.opencode --serial auto` (ou un port explicite), diagnostic `python -m pc.buddy --serial auto status`. Un seul outil sur le port série, DTR/RTS bas. Le dashboard se sert du bridge et injecte un aperçu temporaire (15 s par défaut) qui revient à l'état OpenCode ; arrêter le pont avant `pc.deploy`, `pc.pet` ou `mpremote`.
 - `integration/openbuddy/dist/` : plugin v2 autonome généré, hors autochargement ; sources dans `integration/openbuddy/src/`, métadonnées/licence dans `assets/`, build `npm --prefix integration/openbuddy run build`. Ne pas éditer `index.js` à la main. Installation globale avec `python -m pc.install_plugin`.
 - `pc/quota.py` : texte `utilisé / limite` du fournisseur (ex. `0 / 200`) via une commande configurée dans `%APPDATA%\openbuddy\quota.json`, envoyé au firmware dans le champ optionnel `info` de la commande `state` et affiché à la place de `PET / MICROSD` ; rafraîchi toutes les 600 s et à l'entrée dans les états de `refresh_on` (`success` par défaut, 10 s minimum entre deux appels) ; `--no-quota` ou `--quota-config`. Les tests ne doivent jamais lancer la vraie commande (voir `setUpModule` de `tests/test_opencode_bridge.py`).
@@ -36,7 +36,7 @@ Lire d'abord `docs/hardware.md` (matériel, brochage, pièges), `docs/opencode-e
 ## État
 
 - Cible : C6-LCD-1.47, MicroPython 1.29, écran **landscape 320×172** (USB-C à gauche par défaut), BLE HID + GATT et USB série, appairage authentifié avec clés persistantes.
-- Microprogramme **0.5.0** (kits publiés en 1.2.0 : firmware 0.3.0). Pet lu depuis une microSD FAT32 partagée avec l'écran (un buffer de 19 968 octets).
+- Microprogramme **0.6.0** (kits publiés en 1.2.0 : firmware 0.3.0). Pet lu depuis une microSD FAT32 partagée avec l'écran (un buffer de 19 968 octets).
 - Plugin `openbuddy.events` autonome (SDK 2.2.5 embarqué, sans Node/npm), réservé au service OpenCode local géré. Éviter de charger en même temps les copies globale et projet (`Duplicate plugin ID`).
 - Pont Python 3.11+, sons et toasts Windows indépendants du BLE. Utiliser le runtime WinRT 4.1.0 ; ne pas installer Windows-Toasts 1.3.1 (impose un runtime 3.x incompatible).
 - BOOT : appui court = pet suivant parmi les packs valides de la SD (sélection en RAM, sans écriture sur la carte), appui long 3 s = fenêtre d'appairage BLE, appui court pendant une comparaison de code = confirmation. Plus d'événement `button` ni de F13 sur appui court.

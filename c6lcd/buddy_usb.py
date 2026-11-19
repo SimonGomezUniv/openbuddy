@@ -86,7 +86,9 @@ class BuddyUSB:
                 self.state = message["state"]
                 self.label = message.get("label", "")
                 self.info = message.get("info", "")
-            self.last_seen = now
+            # A status poll is observational and must not extend the display lease.
+            if command != "status":
+                self.last_seen = now
             response = {"event": "ack", "id": request_id, "state": self.state}
             if pet_info is not None:
                 response.update(pet_info)

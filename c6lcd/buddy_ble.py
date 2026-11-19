@@ -361,7 +361,9 @@ class BuddyBLE:
                 self.hid_until = time.ticks_add(now, HID_ARM_MS)
             elif command == "pet_next":
                 raise ValueError("Pet switching is only available over USB")
-            self.last_seen = now
+            # Status reads do not count as a host heartbeat; only live commands do.
+            if command != "status":
+                self.last_seen = now
             response = {"event": "ack", "id": request_id, "state": self.state}
             if command == "status":
                 response.update({"secure": self.secure, "hid": True,
